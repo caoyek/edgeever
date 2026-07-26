@@ -1,0 +1,32 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    # 每天 UTC 00:00 (北京时间早 8:00) 自动运行
+    - cron: '0 0 * * *'
+  workflow_dispatch: # 支持在 GitHub 页面手动点击触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync and merge upstream
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 添加上游远程仓库
+          git remote add upstream https://github.com/tianma-if/edgeever.git || true
+          git fetch upstream main
+
+          # 切换并合并上游 main 分支
+          git checkout main
+          git merge upstream/main --allow-unrelated-histories -m "chore: auto sync from upstream"
+
+          # 推送到你自己的仓库
+          git push origin main
