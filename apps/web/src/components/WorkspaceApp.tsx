@@ -1301,9 +1301,9 @@ export const WorkspaceApp = ({
     const selectedMemoInList = selectedMemoId ? memos.some((memo) => memo.id === selectedMemoId) : false;
 
     if (createdMemoEditId && selectedMemoId === createdMemoEditId) {
-      if (selectedMemoInList) {
-        setCreatedMemoEditId(null);
-      }
+      // Keep the create request alive until the editor consumes it. The new
+      // memo can appear in the list before its detail query has mounted the
+      // editor, and clearing it here would lose the autofocus request.
       return;
     }
 
@@ -1622,10 +1622,8 @@ export const WorkspaceApp = ({
   const emptyTrashMutation = useMutation({
     mutationFn: api.emptyTrash,
     onMutate: async (): Promise<EmptyTrashOptimisticContext> => {
-      setEmptyTrashConfirmationOpen(false);
-      clearMemoSelection();
-      setSelectedMemoId(null);
-      setActivePane("memos");
+      const previousActivePane = activePane;
+      const previousSelectedMemoId = selectedMemoId;
 
       await Promise.all([
         queryClient.cancelQueries({ queryKey: ["memos"] }),
@@ -1636,14 +1634,16 @@ export const WorkspaceApp = ({
       const previousMemoLists = queryClient.getQueriesData<MemoListQueryData>({ queryKey: ["memos"] });
       const previousMemoDetails = queryClient.getQueriesData<{ memo: MemoDetail }>({ queryKey: ["memo"] });
 
+      // Keep the optimistic update limited to list data. Removing the active
+      // memo detail query here can make the editor render with a missing memo
+      // during the same React update and blank the whole workspace.
       clearTrashMemoLists(queryClient);
-      for (const [queryKey] of previousMemoDetails) {
-        if (queryKey[2] === "trash") {
-          queryClient.removeQueries({ queryKey });
-        }
-      }
+      setEmptyTrashConfirmationOpen(false);
+      clearMemoSelection();
+      setSelectedMemoId(null);
+      setActivePane("memos");
 
-      return { previousMemoLists, previousMemoDetails, previousActivePane: activePane, previousSelectedMemoId: selectedMemoId };
+      return { previousMemoLists, previousMemoDetails, previousActivePane, previousSelectedMemoId };
     },
     onError: (_error, _variables, context) => {
       context?.previousMemoLists.forEach(([queryKey, data]) => {
@@ -1659,13 +1659,11 @@ export const WorkspaceApp = ({
         description: t("workspaceDialogs.emptyTrashFailedDescription"),
       });
     },
-    onSettled: (_data, error) => {
-      const refetchType = error ? "active" : "inactive";
-
+    onSettled: () => {
       void Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["memos"], refetchType }),
-        queryClient.invalidateQueries({ queryKey: ["memo"], refetchType }),
-        queryClient.invalidateQueries({ queryKey: ["resources"], refetchType }),
+        queryClient.invalidateQueries({ queryKey: ["memos"], refetchType: "active" }),
+        queryClient.invalidateQueries({ queryKey: ["memo"], refetchType: "active" }),
+        queryClient.invalidateQueries({ queryKey: ["resources"], refetchType: "active" }),
       ]);
     },
   });
@@ -2723,6 +2721,7 @@ export const WorkspaceApp = ({
                     authRequired={authRequired}
                     demoMode={demoMode}
                     isOwner={authRequired && user?.role === "owner"}
+                    user={user}
                   />
                 ) : rightView === "assets" ? (
                   <AssetsPane onClose={handleCloseAssets} activeMemo={selectedMemo} />
