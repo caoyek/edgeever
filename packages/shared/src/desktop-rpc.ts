@@ -21,6 +21,7 @@ export type DesktopRpcMethod =
   | "template.delete"
   | "resource.list"
   | "resource.cache"
+  | "resource.delete"
   | "tag.list"
   | "tag.rename"
   | "tag.delete"
@@ -86,6 +87,7 @@ export type DesktopRpcResponses = {
   "template.delete": { ok: true };
   "resource.list": { resources: ResourceListItem[]; summary: ResourceStorageSummary };
   "resource.cache": { ok: true };
+  "resource.delete": { ok: true };
   "tag.list": { tags: import("./types").TagSummary[] };
   "tag.rename": { ok: true; updated: number };
   "tag.delete": { ok: true; updated: number };
@@ -104,7 +106,7 @@ export type DesktopRpcResponses = {
   "memo.restoreRevision": { memo: MemoDetail };
   "memo.revision.cache": { ok: true };
   "sync.status": { pending: number; syncing: number; conflict: number; error: number; cursor: number; syncIdentity: string | null; lastSyncedAt: string | null };
-  "sync.bootstrap.prepare": { clearedSeedData: boolean };
+  "sync.bootstrap.prepare": { clearedSeedData: boolean; rebuiltMirror: boolean };
   "sync.outbox.list": { items: DesktopOutboxItem[] };
   "sync.outbox.ack": { ok: true; memo: MemoDetail | null; notebook: Notebook | null; template: MemoTemplate | null };
   "sync.outbox.fail": { ok: true };
@@ -131,6 +133,7 @@ export type DesktopRpcParams = {
   "template.delete": { templateId: string };
   "resource.list": { limit?: number };
   "resource.cache": { resource: import("./types").Resource };
+  "resource.delete": { resourceId: string };
   "tag.list": Record<string, never>;
   "tag.rename": { tag: string; name: string };
   "tag.delete": { tag: string };
@@ -149,7 +152,7 @@ export type DesktopRpcParams = {
   "memo.restoreRevision": { memoId: string; revisionId: string };
   "memo.revision.cache": { revision: import("./types").MemoRevision };
   "sync.status": Record<string, never>;
-  "sync.bootstrap.prepare": Record<string, never>;
+  "sync.bootstrap.prepare": { reset?: boolean };
   "sync.outbox.list": { limit?: number };
   "sync.outbox.ack": { id: number; remoteMemo?: MemoDetail; remoteNotebook?: Notebook; remoteTemplate?: MemoTemplate };
   "sync.outbox.fail": { id: number; error: string; conflict?: boolean };

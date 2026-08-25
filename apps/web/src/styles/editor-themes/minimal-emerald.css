@@ -8,20 +8,29 @@
   --editor-theme-accent: #059669;
   --editor-theme-soft: #f8fafc;
   --editor-theme-border: #e2e8f0;
+  --editor-theme-code-bg: #f1f5f9;
+  --editor-theme-code-text: #059669;
   --editor-theme-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
   --editor-theme-radius: 6px;
 }
 
+:root.dark .edgeever-editor[data-editor-theme="minimal-emerald"]:not([data-editor-theme="default"]) {
+  --editor-theme-bg: var(--workspace-editor);
+  --editor-theme-text: #d8e0db;
+  --editor-theme-muted: #97a59c;
+  --editor-theme-heading: #f0f4f1;
+  --editor-theme-accent: #4fd1a1;
+  --editor-theme-soft: #202923;
+  --editor-theme-border: #314039;
+  --editor-theme-code-bg: #111713;
+  --editor-theme-code-text: #7ee0bc;
+}
+
 .edgeever-editor[data-editor-theme="minimal-emerald"]:not([data-editor-theme="default"]) .ProseMirror {
-  font-size: 1rem;
-  line-height: 1.75;
   letter-spacing: -0.003em;
 }
 
 .edgeever-editor[data-editor-theme="minimal-emerald"]:not([data-editor-theme="default"]) .ProseMirror p {
-  margin: 0;
-  padding: 0.4rem 0;
-  line-height: 1.75;
   color: var(--editor-theme-text);
 }
 
@@ -60,14 +69,14 @@
 }
 
 .edgeever-editor[data-editor-theme="minimal-emerald"]:not([data-editor-theme="default"]) .ProseMirror strong {
-  color: #171717;
-  font-weight: 600;
+  color: var(--editor-theme-heading);
+  font-weight: 700;
 }
 
 .edgeever-editor[data-editor-theme="minimal-emerald"]:not([data-editor-theme="default"]) .ProseMirror a {
   color: var(--editor-theme-accent);
   text-decoration: underline;
-  text-decoration-color: rgba(5, 150, 105, 0.4);
+  text-decoration-color: color-mix(in srgb, var(--editor-theme-accent) 42%, transparent);
   text-underline-offset: 2px;
 }
 
@@ -76,19 +85,8 @@
   border-left: 3px solid var(--editor-theme-accent);
   border-radius: 0;
   background: var(--editor-theme-soft);
-  color: #374151;
+  color: var(--editor-theme-muted);
   padding: 0.6rem 1rem;
-}
-
-.edgeever-editor[data-editor-theme="minimal-emerald"]:not([data-editor-theme="default"]) .ProseMirror ul,
-.edgeever-editor[data-editor-theme="minimal-emerald"]:not([data-editor-theme="default"]) .ProseMirror ol {
-  margin: 0.5rem 0;
-  padding-left: 1.4rem;
-}
-
-.edgeever-editor[data-editor-theme="minimal-emerald"]:not([data-editor-theme="default"]) .ProseMirror li {
-  margin: 0.2rem 0;
-  line-height: 1.7;
 }
 
 .edgeever-editor[data-editor-theme="minimal-emerald"]:not([data-editor-theme="default"]) .ProseMirror li::marker {
@@ -97,10 +95,10 @@
 }
 
 .edgeever-editor[data-editor-theme="minimal-emerald"]:not([data-editor-theme="default"]) .ProseMirror code {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--editor-theme-border);
   border-radius: 4px;
-  background: #f1f5f9;
-  color: #059669;
+  background: var(--editor-theme-code-bg);
+  color: var(--editor-theme-code-text);
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.875rem;
   padding: 0.15rem 0.35rem;
@@ -109,26 +107,26 @@
 .edgeever-editor[data-editor-theme="minimal-emerald"]:not([data-editor-theme="default"]) .ProseMirror pre {
   border: 1px solid var(--editor-theme-border);
   border-radius: 6px;
-  background: #f8fafc;
-  color: #1e293b;
+  background: var(--editor-theme-code-bg);
+  color: var(--editor-theme-code-text);
   padding: 0.75rem 1rem;
 }
 
-.edgeever-editor[data-editor-theme="minimal-emerald"]:not([data-editor-theme="default"]) .ProseMirror hr {
+.edgeever-editor[data-editor-theme="minimal-emerald"]:not([data-editor-theme="default"]) .ProseMirror hr:not([data-edgeever-merge-divider]) {
   height: 1px;
   border: 0;
-  background: #e2e8f0;
+  background: var(--editor-theme-border);
   margin: 1.75rem 0;
 }
 
 .edgeever-editor[data-editor-theme="minimal-emerald"]:not([data-editor-theme="default"]) .ProseMirror th {
-  background: #f8fafc;
+  background: var(--editor-theme-soft);
   color: var(--editor-theme-heading);
   font-weight: 600;
 }
 
 .edgeever-editor[data-editor-theme="minimal-emerald"]:not([data-editor-theme="default"]) .ProseMirror .edgeever-theme-block {
-  --theme-block-bg: #f8fafc;
-  --theme-block-border: #e2e8f0;
+  --theme-block-bg: var(--editor-theme-soft);
+  --theme-block-border: var(--editor-theme-border);
   border-radius: 6px;
 }

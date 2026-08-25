@@ -1,11 +1,15 @@
 import { Previewer } from "pagedjs";
 import hljs from "highlight.js/lib/common";
 import { renderMermaidSVG, THEMES } from "beautiful-mermaid";
+import { MERMAID_THEME_PALETTES } from "@/components/ThemeProvider";
 import {
   NOTE_PRINT_MESSAGE,
   NOTE_PRINT_READY_MESSAGE,
   type NotePrintPayload,
 } from "@/lib/note-print";
+import { getMessageTargetOrigin } from "@/lib/app-page-path";
+import { withEnvironmentTitlePrefix } from "@/lib/environment-title";
+import katexStyles from "katex/dist/katex.min.css?inline";
 import printStyles from "@/styles/note-print.css?inline";
 import "@fontsource-variable/noto-sans-sc/wght.css";
 import "@/styles/note-print-screen.css";
@@ -37,6 +41,7 @@ const renderMermaidBlocks = async (root: HTMLElement) => {
     try {
       const svg = renderMermaidSVG(source, {
         ...THEMES["zinc-light"],
+        ...MERMAID_THEME_PALETTES["zinc-light"],
         transparent: true,
         font: PRINT_FONT_FAMILY,
         padding: 24,
@@ -106,7 +111,10 @@ const buildSource = (payload: NotePrintPayload) => {
 
 const renderPreview = async (payload: NotePrintPayload) => {
   document.documentElement.lang = payload.language;
-  document.title = `${payload.title} · EdgeEver`;
+  document.title = withEnvironmentTitlePrefix(`${payload.title} · EdgeEver`, {
+    development: import.meta.env.DEV,
+    profile: __EDGEEVER_DEVELOPMENT_PROFILE__,
+  });
   setText(status, payload.labels.preparing);
   setText(hint, "");
   setText(closeButton, payload.labels.close);
@@ -127,7 +135,7 @@ const renderPreview = async (payload: NotePrintPayload) => {
   const previewer = new Previewer();
   await previewer.preview(
     source,
-    [{ [window.location.href]: printStyles }],
+    [{ [window.location.href]: `${katexStyles}\n${printStyles}` }],
     preview
   );
   await document.fonts.ready;
@@ -164,7 +172,7 @@ window.addEventListener("message", (event: MessageEvent<NotePrintPayload>) => {
 if (window.opener && token) {
   window.opener.postMessage(
     { type: NOTE_PRINT_READY_MESSAGE, token },
-    window.location.origin
+    getMessageTargetOrigin(window.location.origin)
   );
 } else {
   setText(status, "EdgeEver");

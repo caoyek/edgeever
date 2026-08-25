@@ -38,7 +38,7 @@ await waitFor((message) => message.event === "ready");
 const notebooks = await request("notebook.list");
 const seedInbox = notebooks.notebooks.find((notebook) => notebook.slug === "inbox");
 assert.ok(seedInbox, "seed inbox notebook should exist");
-assert.deepEqual(await request("sync.bootstrap.prepare"), { clearedSeedData: true });
+assert.deepEqual(await request("sync.bootstrap.prepare"), { clearedSeedData: true, rebuiltMirror: false });
 assert.equal((await request("memo.list", { limit: 20 })).totalCount, 0, "bootstrap preparation should remove only pristine seed data");
 assert.equal((await request("notebook.list")).notebooks.length, 0, "bootstrap preparation should remove pristine seed notebooks");
 const inbox = (await request("notebook.create", { name: "Inbox" })).notebook;
@@ -48,11 +48,20 @@ if (process.platform !== "win32") {
 }
 
 const first = await request("memo.create", { notebookId: inbox.id, title: "Local first", contentMarkdown: "searchable body", tags: ["local"] });
-assert.deepEqual(await request("sync.bootstrap.prepare"), { clearedSeedData: false });
+assert.deepEqual(await request("sync.bootstrap.prepare"), { clearedSeedData: false, rebuiltMirror: false });
 assert.equal((await request("memo.get", { memoId: first.memo.id })).memo.id, first.memo.id, "bootstrap preparation must preserve local user data");
 const second = await request("memo.create", { notebookId: inbox.id, title: "Second memo", contentMarkdown: "another body", tags: [] });
 const search = await request("memo.list", { q: "searchable", limit: 20 });
 assert.deepEqual(search.memos.map((memo) => memo.id), [first.memo.id]);
+const childNotebook = (await request("notebook.create", { name: "Inbox child", parentId: inbox.id })).notebook;
+const childMemo = await request("memo.create", { notebookId: childNotebook.id, title: "Nested memo", contentMarkdown: "nested body", tags: [] });
+const subtree = await request("memo.list", {
+  notebookId: inbox.id,
+  notebookIds: [inbox.id, childNotebook.id],
+  limit: 20,
+});
+assert.ok(subtree.memos.some((memo) => memo.id === first.memo.id), "parent notebook notes should remain in a subtree query");
+assert.ok(subtree.memos.some((memo) => memo.id === childMemo.memo.id), "subtree queries should include child notebook notes");
 await request("memo.update", {
   memoId: first.memo.id,
   title: "Local first updated",
@@ -98,6 +107,7 @@ await request("memo.update", updatePayload("latest autosave"));
 const coalescedUpdates = (await request("sync.outbox.list", { limit: 200 })).items.filter((item) => item.kind === "memo.update" && item.entityId === coalesced.memo.id);
 assert.equal(coalescedUpdates.length, 1, "offline autosaves should coalesce into one sidecar outbox item");
 assert.equal(coalescedUpdates[0].payload.contentMarkdown, "latest autosave");
+assert.equal((await request("memo.get", { memoId: coalesced.memo.id })).memo.revision, 0, "local autosaves must not advance the acknowledged cloud revision");
 
 const batchNotebook = (await request("notebook.create", { name: "Batch destination" })).notebook;
 const batchFirst = (await request("memo.create", { notebookId: inbox.id, title: "Batch one", contentMarkdown: "batch one", tags: ["batch-tag"] })).memo;
@@ -115,10 +125,37 @@ assert.equal((await request("memo.list", { notebookId: batchNotebook.id, limit: 
 assert.equal((await request("memo.emptyTrash")).deleted, 1);
 assert.equal((await request("memo.list", { trash: true, notebookId: batchNotebook.id, limit: 20 })).totalCount, 0);
 
+await request("resource.cache", {
+  resource: {
+    id: "resource-from-merge-source",
+    memoId: first.memo.id,
+    originalMemoId: null,
+    kind: "attachment",
+    mimeType: "application/zip",
+    filename: "merged-source.zip",
+    byteSize: 42,
+    sha256: "resource-hash",
+    width: null,
+    height: null,
+  },
+});
 const merged = await request("memo.merge", { memoIds: [first.memo.id, second.memo.id] });
 assert.equal(merged.memo.sourceMemoIds.length, 2);
 const trash = await request("memo.list", { trash: true, limit: 20 });
 assert.ok(trash.memos.some((memo) => memo.id === first.memo.id));
+const mergeOutbox = (await request("sync.outbox.list", { limit: 200 })).items.find((item) => item.kind === "memo.merge" && item.entityId === merged.memo.id);
+assert.ok(mergeOutbox, "memo merge should be queued");
+const remoteMergedMemo = { ...merged.memo, id: "memo_remote_merged" };
+await request("sync.apply", {
+  changes: [{ entityType: "memo", operation: "upsert", entityId: remoteMergedMemo.id, memo: remoteMergedMemo, notebook: null }],
+});
+await request("sync.outbox.ack", { id: mergeOutbox.id, remoteMemo: remoteMergedMemo });
+await assert.rejects(() => request("memo.get", { memoId: merged.memo.id, includeDeleted: true }), /Query returned no rows/);
+assert.equal((await request("memo.get", { memoId: first.memo.id, includeDeleted: true })).memo.mergedIntoMemoId, remoteMergedMemo.id);
+const mergedResource = (await request("resource.list", { limit: 200 })).resources.find((resource) => resource.id === "resource-from-merge-source");
+assert.equal(mergedResource.memoId, remoteMergedMemo.id, "merge acknowledgement should remap resources before deleting the local memo");
+assert.equal(mergedResource.originalMemoId, first.memo.id, "merge acknowledgement should preserve the resource's source memo");
+assert.ok(!(await request("sync.outbox.list", { limit: 200 })).items.some((item) => item.id === mergeOutbox.id), "merge acknowledgement should clear the outbox item");
 
 await request("template.cache", {
   template: {
@@ -184,7 +221,7 @@ await request("storage.restore", { path: backupWithResource.path });
 await assert.rejects(() => request("memo.get", { memoId: afterBackup.memo.id }), /Query returned no rows/);
 assert.equal(readFileSync(join(stagedResourceDirectory, "stage-test.bin"), "utf8"), "offline attachment snapshot", "restore should recover staged resources");
 const outbox = await request("sync.outbox.list", { limit: 100 });
-assert.ok(outbox.items.some((item) => item.kind === "memo.merge"));
+assert.ok(!outbox.items.some((item) => item.id === mergeOutbox.id), "a restored backup must not resurrect an acknowledged merge");
 const conflictMemo = await request("memo.create", { notebookId: inbox.id, title: "Conflict test", contentMarkdown: "local conflict", tags: [] });
 const conflictCandidate = (await request("sync.outbox.list", { limit: 200 })).items.find((item) => item.entityId === conflictMemo.memo.id);
 assert.ok(conflictCandidate, "conflict test should create an outbox item");
@@ -195,4 +232,4 @@ assert.equal((await request("sync.status")).conflict, 0);
 
 child.stdin.end();
 await new Promise((resolve) => child.once("close", resolve));
-console.log(JSON.stringify({ ok: true, checked: ["memo.create", "memo.list.search", "memo.update", "memo.update.coalesce", "memo.revisions", "memo.restoreRevision", "memo.revision.cache", "tag.rename", "memo.moveBatch", "memo.pinBatch", "memo.deleteBatch", "memo.restore", "memo.emptyTrash", "memo.merge", "template.cache", "template.create.payload", "template.delete", "storage.backup", "storage.backups", "storage.restore", "sync.outbox", "sync.outbox.discard"] }));
+console.log(JSON.stringify({ ok: true, checked: ["memo.create", "memo.list.search", "memo.list.subtree", "memo.update", "memo.update.coalesce", "memo.revisions", "memo.restoreRevision", "memo.revision.cache", "tag.rename", "memo.moveBatch", "memo.pinBatch", "memo.deleteBatch", "memo.restore", "memo.emptyTrash", "memo.merge", "template.cache", "template.create.payload", "template.delete", "storage.backup", "storage.backups", "storage.restore", "sync.outbox", "sync.outbox.discard"] }));

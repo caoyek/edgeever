@@ -11,6 +11,7 @@ on:
     types: [published]
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
@@ -116,9 +117,15 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --pattern 'EdgeEver-*-mac-arm64.dmg' \
             --pattern 'EdgeEver-*-mac-arm64.dmg.blockmap' \
+            --pattern 'EdgeEver-*-mac-arm64.zip' \
+            --pattern 'EdgeEver-*-mac-arm64.zip.blockmap' \
+            --pattern 'EdgeEver-*-mac-x64.dmg' \
+            --pattern 'EdgeEver-*-mac-x64.dmg.blockmap' \
+            --pattern 'EdgeEver-*-mac-x64.zip' \
+            --pattern 'EdgeEver-*-mac-x64.zip.blockmap' \
             --pattern 'latest-mac.yml' \
             --dir "$RUNNER_TEMP/native-assets"
-          test "$(find "$RUNNER_TEMP/native-assets" -type f | wc -l | tr -d ' ')" = "3"
+          test "$(find "$RUNNER_TEMP/native-assets" -type f | wc -l | tr -d ' ')" = "9"
           gh release upload "$CURRENT_TAG" "$RUNNER_TEMP/native-assets/"* \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
@@ -140,8 +147,18 @@ jobs:
           )
         )
       }}
-    name: macOS arm64
-    runs-on: macos-14
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+            shared_validation: true
+          - arch: x64
+            runner: macos-15-intel
+            shared_validation: false
 
     steps:
       - name: Check out source
@@ -155,11 +172,15 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Bun dependencies
+      # Restoring this large cache is consistently slower than a cold install on
+      # the Intel runner. The arm64 job owns the shared validation and keeps the
+      # cache because its restore path is substantially faster.
+      - name: Cache Bun dependencies for shared validation
+        if: matrix.shared_validation
         uses: actions/cache@v5
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-bun-${{ hashFiles('bun.lock') }}
 
       - name: Cache Rust dependencies and sidecar builds
         uses: actions/cache@v5
@@ -168,9 +189,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             crates/desktop-sidecar/target
-          key: ${{ runner.os }}-rust-${{ hashFiles('crates/desktop-sidecar/Cargo.lock', 'crates/desktop-sidecar/**/*.rs') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-rust-${{ hashFiles('crates/desktop-sidecar/Cargo.lock', 'crates/desktop-sidecar/**/*.rs') }}
           restore-keys: |
-            ${{ runner.os }}-rust-
+            ${{ runner.os }}-${{ matrix.arch }}-rust-
 
       - name: Cache Electron downloads
         uses: actions/cache@v5
@@ -178,7 +199,7 @@ jobs:
           path: |
             ~/Library/Caches/electron
             ~/Library/Caches/electron-builder
-          key: ${{ runner.os }}-electron-${{ hashFiles('bun.lock', 'apps/desktop/package.json') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-electron-${{ hashFiles('bun.lock', 'apps/desktop/package.json') }}
 
       - name: Import macOS signing identity
         env:
@@ -234,25 +255,36 @@ jobs:
         run: bun run build:web
 
       - name: Verify Web precache budget
+        if: matrix.shared_validation
         run: bun run verify:web-performance
 
       - name: Run project type checks
+        if: matrix.shared_validation
         run: |
           bun run typecheck
           bun run typecheck:mobile
 
       - name: Build debug sidecar for integration tests
+        if: matrix.shared_validation
         run: cargo build --manifest-path crates/desktop-sidecar/Cargo.toml
 
       - name: Run desktop regression tests
+        if: matrix.shared_validation
         run: bun run test:desktop
 
-      - name: Build Rust sidecar
+      - name: Verify packaged renderer startup
+        if: matrix.shared_validation
+        run: bun run verify:desktop-renderer
+
+      - name: Validate Rust sidecar
+        if: matrix.shared_validation
         run: |
           cargo fmt --manifest-path crates/desktop-sidecar/Cargo.toml -- --check
           cargo clippy --manifest-path crates/desktop-sidecar/Cargo.toml --all-targets -- -D warnings
           cargo test --manifest-path crates/desktop-sidecar/Cargo.toml
-          cargo build --manifest-path crates/desktop-sidecar/Cargo.toml --release
+
+      - name: Build architecture-specific Rust sidecar
+        run: cargo build --manifest-path crates/desktop-sidecar/Cargo.toml --release
 
       - name: Prepare Apple notarization API key
         env:
@@ -273,12 +305,104 @@ jobs:
           echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
 
       - name: Package desktop installer
+        env:
+          EDGE_EVER_DESKTOP_ARCH: ${{ matrix.arch }}
         run: bun scripts/run-desktop-builder.mjs --publish never
 
       - name: Verify desktop installer
         env:
+          EDGE_EVER_DESKTOP_ARCH: ${{ matrix.arch }}
           EDGE_EVER_VERIFY_TARGET: darwin
         run: bun scripts/verify-desktop-package.mjs
+
+      - name: Stage architecture-specific desktop assets
+        uses: actions/upload-artifact@v6
+        with:
+          name: edgeever-desktop-macOS-${{ matrix.arch }}-staging
+          path: |
+            release/desktop/EdgeEver-*-mac-${{ matrix.arch }}.dmg
+            release/desktop/EdgeEver-*-mac-${{ matrix.arch }}.dmg.blockmap
+            release/desktop/EdgeEver-*-mac-${{ matrix.arch }}.zip
+            release/desktop/EdgeEver-*-mac-${{ matrix.arch }}.zip.blockmap
+          if-no-files-found: error
+          retention-days: 14
+
+  native-build-timings:
+    needs: desktop
+    if: >-
+      ${{
+        always() &&
+        github.repository == 'tianma-if/edgeever' &&
+        needs.desktop.result != 'skipped'
+      }}
+    name: Report macOS build timings
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out timing reporter
+        uses: actions/checkout@v5
+
+      - name: Collect native build timings
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?filter=latest&per_page=100" \
+            > "$RUNNER_TEMP/actions-jobs.json"
+          node scripts/report-native-build-timings.mjs \
+            --input "$RUNNER_TEMP/actions-jobs.json" \
+            --platform desktop \
+            --json "$RUNNER_TEMP/native-build-timings.json" \
+            --markdown "$RUNNER_TEMP/native-build-timings.md"
+          cat "$RUNNER_TEMP/native-build-timings.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload machine-readable timing report
+        uses: actions/upload-artifact@v6
+        with:
+          name: edgeever-desktop-build-timings-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-build-timings.json
+          if-no-files-found: error
+          retention-days: 90
+
+  desktop-assets:
+    needs: [release-plan, desktop]
+    if: >-
+      ${{
+        always() &&
+        github.repository == 'tianma-if/edgeever' &&
+        needs.desktop.result == 'success' &&
+        (
+          (github.event_name == 'workflow_dispatch' && inputs.release_tag == '') ||
+          (
+            github.event_name == 'workflow_dispatch' &&
+            inputs.release_tag != '' &&
+            needs.release-plan.result == 'success' &&
+            needs.release-plan.outputs.asset_ready == 'false' &&
+            needs.release-plan.outputs.rebuild == 'true'
+          )
+        )
+      }}
+    name: Finalize macOS release assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Download architecture-specific assets
+        uses: actions/download-artifact@v7
+        with:
+          pattern: edgeever-desktop-macOS-*-staging
+          path: release/desktop
+          merge-multiple: true
+
+      - name: Create and audit combined update metadata
+        run: |
+          version="$(node -p "JSON.parse(require('fs').readFileSync('apps/desktop/package.json', 'utf8')).version")"
+          node scripts/create-mac-update-metadata.mjs release/desktop "$version"
+          asset_ready="$(
+            find release/desktop -maxdepth 1 -type f -exec basename {} \; |
+              node scripts/check-native-release-assets.mjs desktop true "v${version}" "$version"
+          )"
+          test "$asset_ready" = "true"
 
       - name: Upload verified desktop assets to Release
         if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
@@ -286,22 +410,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          version="$(node -p "JSON.parse(require('fs').readFileSync('apps/desktop/package.json', 'utf8')).version")"
-          gh release upload "$RELEASE_TAG" \
-            "release/desktop/EdgeEver-${version}-mac-arm64.dmg" \
-            "release/desktop/EdgeEver-${version}-mac-arm64.dmg.blockmap" \
-            "release/desktop/latest-mac.yml" \
+          gh release upload "$RELEASE_TAG" release/desktop/* \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
 
-      - name: Upload desktop installer and metadata
+      - name: Upload combined desktop installers and metadata
         uses: actions/upload-artifact@v6
         with:
-          name: edgeever-desktop-macOS-arm64
-          path: |
-            release/desktop/**/*.dmg
-            release/desktop/**/*.zip
-            release/desktop/**/*.blockmap
-            release/desktop/**/*.yml
+          name: edgeever-desktop-macOS-arm64-x64
+          path: release/desktop/*
           if-no-files-found: error
           retention-days: 14
